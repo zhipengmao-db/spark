@@ -59,5 +59,8 @@ public enum TableCatalogCapability {
    * {@link TableCatalog#createTable}.
    * See {@link Column#defaultValue()}.
    */
-  SUPPORT_COLUMN_DEFAULT_VALUE
+  SUPPORT_COLUMN_DEFAULT_VALUE,
+
+
+  SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS
 }

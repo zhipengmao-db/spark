@@ -23,6 +23,7 @@ import org.apache.spark.SparkThrowable
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.expressions.{EqualTo, Hex, Literal}
 import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.util.IdentityColumnSpec
 import org.apache.spark.sql.connector.catalog.TableChange.ColumnPosition.{after, first}
 import org.apache.spark.sql.connector.expressions.{ApplyTransform, BucketTransform, ClusterByTransform, DaysTransform, FieldReference, HoursTransform, IdentityTransform, LiteralValue, MonthsTransform, Transform, YearsTransform}
 import org.apache.spark.sql.connector.expressions.LogicalExpressions.bucket
@@ -2907,6 +2908,76 @@ class DDLParserSuite extends AnalysisTest {
       errorClass = "PARSE_SYNTAX_ERROR",
       parameters = Map("error" -> "'a'", "hint" -> ": missing '('")
     )
+  }
+
+  test("SPARK-48824: implement parser support for GENERATED ALWAYS AS IDENTITY columns in tables") {
+    for {
+      identityColumnDefStr <- Seq("BY DEFAULT", "ALWAYS")
+      identityColumnSpecStr <- Seq(
+        "START WITH 1 INCREMENT BY 1",
+        "INCREMENT BY 1 START WITH 1",
+        "START WITH 1",
+        "INCREMENT BY 1",
+        "")
+    } {
+      val columnsWithIdentitySpec = Seq(
+        ColumnDefinition(
+          "id",
+          IntegerType,
+          nullable = false,
+          identitySpec = Some(
+            IdentityColumnSpec(
+              start = 1,
+              step = 1,
+              allowExplicitInsert = identityColumnDefStr == "BY DEFAULT"
+            )
+          )
+        ),
+        ColumnDefinition("val", IntegerType)
+      )
+      comparePlans(
+        parsePlan(
+          s"CREATE TABLE my_tab(id BIGINT GENERATED $identityColumnDefStr" +
+            s" AS IDENTITY($identityColumnSpecStr), val INT) USING parquet"
+        ),
+        CreateTable(
+          UnresolvedIdentifier(Seq("my_tab")),
+          columnsWithIdentitySpec,
+          Seq.empty[Transform],
+          UnresolvedTableSpec(
+            Map.empty[String, String],
+            Some("parquet"),
+            OptionList(Seq.empty),
+            None,
+            None,
+            None,
+            false
+          ),
+          false
+        )
+      )
+      comparePlans(
+        parsePlan(
+          s"REPLACE TABLE my_tab(id BIGINT GENERATED $identityColumnDefStr" +
+            s" AS IDENTITY($identityColumnSpecStr), val INT) USING parquet"
+        ),
+        ReplaceTable(
+          UnresolvedIdentifier(Seq("my_tab")),
+          columnsWithIdentitySpec,
+          Seq.empty[Transform],
+          UnresolvedTableSpec(
+            Map.empty[String, String],
+            Some("parquet"),
+            OptionList(Seq.empty),
+            None,
+            None,
+            None,
+            false
+          ),
+          false
+        )
+      )
+    }
   }
 
   test("SPARK-42681: Relax ordering constraint for ALTER TABLE ADD COLUMN options") {

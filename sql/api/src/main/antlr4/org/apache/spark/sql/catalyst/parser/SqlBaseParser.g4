@@ -1237,7 +1237,17 @@ colDefinitionOption
     ;
 
 generationExpression
-    : GENERATED ALWAYS AS LEFT_PAREN expression RIGHT_PAREN
+    : GENERATED ALWAYS AS LEFT_PAREN expression RIGHT_PAREN     #generatedColumn
+    | GENERATED (ALWAYS | BY DEFAULT) AS IDENTITY identitySpec? #identityColumn
+    ;
+
+identitySpec
+    : LEFT_PAREN identitySpecOption* RIGHT_PAREN
+    ;
+
+identitySpecOption
+    : START WITH start=INTEGER_VALUE
+    | INCREMENT BY step=INTEGER_VALUE
     ;
 
 complexColTypeList
@@ -1526,11 +1536,13 @@ ansiNonReserved
     | HOUR
     | HOURS
     | IDENTIFIER_KW
+    | IDENTITY
     | IF
     | IGNORE
     | IMMEDIATE
     | IMPORT
     | INCLUDE
+    | INCREMENT
     | INDEX
     | INDEXES
     | INPATH

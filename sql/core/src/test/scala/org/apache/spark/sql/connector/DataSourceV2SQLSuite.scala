@@ -1731,6 +1731,138 @@ class DataSourceV2SQLSuiteV1Filter
     }
   }
 
+  test("SPARK-48824: Identity columns only allowed with TableCatalogs that " +
+    "SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS") {
+    val tblName = "my_tab"
+    val tableDefinition =
+      s"$tblName(id BIGINT GENERATED ALWAYS AS IDENTITY(), val INT)"
+    for (statement <- Seq("CREATE TABLE", "REPLACE TABLE")) {
+      // InMemoryTableCatalog.capabilities() = {SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS}
+      withTable(s"testcat.$tblName") {
+        if (statement == "REPLACE TABLE") {
+          sql(s"CREATE TABLE testcat.$tblName(a INT) USING foo")
+        }
+        // Can create table with an identity column
+        sql(s"$statement testcat.$tableDefinition USING foo")
+        assert(catalog("testcat").asTableCatalog.tableExists(Identifier.of(Array(), tblName)))
+      }
+      // BasicInMemoryTableCatalog.capabilities() = {}
+      withSQLConf("spark.sql.catalog.dummy" -> classOf[BasicInMemoryTableCatalog].getName) {
+        checkError(
+          exception = intercept[AnalysisException] {
+            sql("USE dummy")
+            sql(s"$statement dummy.$tableDefinition USING foo")
+          },
+          errorClass = "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+          parameters = Map(
+            "tableName" -> "`dummy`.`my_tab`",
+            "operation" -> "identity column"
+          )
+        )
+      }
+    }
+  }
+
+  test("SPARK-48824: Column cannot have both a generation expression and an identity column spec") {
+    val tblName = "my_tab"
+    val tableDefinition =
+      s"$tblName(id BIGINT GENERATED ALWAYS AS 1 GENERATED ALWAYS AS IDENTITY(), val INT)"
+    withSQLConf(SQLConf.DEFAULT_COLUMN_ALLOWED_PROVIDERS.key -> "foo") {
+      for (statement <- Seq("CREATE TABLE", "REPLACE TABLE")) {
+        withTable(s"testcat.$tblName") {
+          if (statement == "REPLACE TABLE") {
+            sql(s"CREATE TABLE testcat.$tblName(a INT) USING foo")
+          }
+          checkError(
+            exception = intercept[AnalysisException] {
+              sql(s"$statement testcat.$tableDefinition USING foo")
+            },
+            errorClass = "PARSE_SYNTAX_ERROR",
+            parameters = Map("error" -> "'1'", "hint" -> "")
+          )
+        }
+      }
+    }
+  }
+
+  test("SPARK-48824: Identity column step must not be zero") {
+    val tblName = "my_tab"
+    val tableDefinition =
+      s"$tblName(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT)"
+    withSQLConf(SQLConf.DEFAULT_COLUMN_ALLOWED_PROVIDERS.key -> "foo") {
+      for (statement <- Seq("CREATE TABLE", "REPLACE TABLE")) {
+        withTable(s"testcat.$tblName") {
+          if (statement == "REPLACE TABLE") {
+            sql(s"CREATE TABLE testcat.$tblName(a INT) USING foo")
+          }
+          checkError(
+            exception = intercept[ParseException] {
+              sql(s"$statement testcat.$tableDefinition USING foo")
+            },
+            errorClass = "IDENTITY_COLUMNS_ILLEGAL_STEP",
+            parameters = Map.empty,
+            context = ExpectedContext(
+              fragment = "(INCREMENT BY 0)",
+              start = 54 + statement.length,
+              stop = 69 + statement.length))
+        }
+      }
+    }
+  }
+
+  test("SPARK-48824: Identity column datatype must be long") {
+    val tblName = "my_tab"
+    val tableDefinition =
+      s"$tblName(id INT GENERATED ALWAYS AS IDENTITY(), val INT)"
+    withSQLConf(SQLConf.DEFAULT_COLUMN_ALLOWED_PROVIDERS.key -> "foo") {
+      for (statement <- Seq("CREATE TABLE", "REPLACE TABLE")) {
+        withTable(s"testcat.$tblName") {
+          if (statement == "REPLACE TABLE") {
+            sql(s"CREATE TABLE testcat.$tblName(a INT) USING foo")
+          }
+          checkError(
+            exception = intercept[ParseException] {
+              sql(s"$statement testcat.$tableDefinition USING foo")
+            },
+            errorClass = "IDENTITY_COLUMNS_UNSUPPORTED_DATA_TYPE",
+            parameters = Map("dataType" -> "IntegerType"),
+            context = ExpectedContext(
+              fragment = "id INT GENERATED ALWAYS AS IDENTITY()",
+              start = 16 + statement.length,
+              stop = 52 + statement.length))
+        }
+      }
+    }
+  }
+
+  test("SPARK-48824: Identity column spec descriptor cannot be duplicated") {
+    val tblName = "my_tab"
+    val tableDefinitions = Seq(
+      s"$tblName(id BIGINT GENERATED ALWAYS AS IDENTITY(START WITH 0 START WITH 1), val INT)",
+      s"$tblName(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 1 INCREMENT BY 2), val INT)",
+      s"$tblName(id BIGINT GENERATED ALWAYS AS " +
+      s"IDENTITY(START WITH 0 INCREMENT BY 1 START WITH 1), val INT)",
+      s"$tblName(id BIGINT GENERATED ALWAYS AS " +
+      s"IDENTITY(INCREMENT BY 1 START WITH 0 INCREMENT BY 2), val INT)"
+    )
+    withSQLConf(SQLConf.DEFAULT_COLUMN_ALLOWED_PROVIDERS.key -> "foo") {
+      for {
+        statement <- Seq("CREATE TABLE", "REPLACE TABLE")
+        tableDefinition <- tableDefinitions
+      } {
+        withTable(s"testcat.$tblName") {
+          if (statement == "REPLACE TABLE") {
+            sql(s"CREATE TABLE testcat.$tblName(a INT) USING foo")
+          }
+          val exception = intercept[ParseException] {
+            sql(s"$statement testcat.$tableDefinition USING foo")
+          }
+          assert(exception.getErrorClass === "IDENTITY_COLUMNS_DUPLICATED_DESCRIPTOR")
+        }
+      }
+    }
+  }
+
   test("SPARK-46972: asymmetrical replacement for char/varchar in V2SessionCatalog.createTable") {
     // unset this config to use the default v2 session catalog.
     spark.conf.unset(V2_SESSION_CATALOG_IMPLEMENTATION.key)

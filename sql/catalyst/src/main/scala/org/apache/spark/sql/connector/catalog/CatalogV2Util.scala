@@ -29,7 +29,7 @@ import org.apache.spark.sql.catalyst.analysis.{AsOfTimestamp, AsOfVersion, Named
 import org.apache.spark.sql.catalyst.catalog.ClusterBySpec
 import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.plans.logical.{SerdeInfo, TableSpec}
-import org.apache.spark.sql.catalyst.util.GeneratedColumn
+import org.apache.spark.sql.catalyst.util.{GeneratedColumn, IdentityColumnUtil}
 import org.apache.spark.sql.catalyst.util.ResolveDefaultColumns._
 import org.apache.spark.sql.connector.catalog.TableChange._
 import org.apache.spark.sql.connector.catalog.functions.UnboundFunction
@@ -601,6 +601,13 @@ private[sql] object CatalogV2Util {
         Seq("comment", GeneratedColumn.GENERATION_EXPRESSION_METADATA_KEY))
       Column.create(f.name, f.dataType, f.nullable, f.getComment().orNull,
         GeneratedColumn.getGenerationExpression(f).get, metadataAsJson(cleanedMetadata))
+    } else if (IdentityColumnUtil.isIdentityColumn(f)) {
+      val cleanedMetadata = metadataWithKeysRemoved(
+        Seq("comment", IdentityColumnUtil.DELTA_IDENTITY_INFO_START,
+          IdentityColumnUtil.DELTA_IDENTITY_INFO_STEP,
+          IdentityColumnUtil.DELTA_IDENTITY_INFO_ALLOW_EXPLICIT_INSERT))
+        Column.create(f.name, f.dataType, f.nullable, f.getComment().orNull,
+          IdentityColumnUtil.getIdentityInfo(f).get, metadataAsJson(cleanedMetadata))
     } else {
       val cleanedMetadata = metadataWithKeysRemoved(Seq("comment"))
       Column.create(f.name, f.dataType, f.nullable, f.getComment().orNull,
